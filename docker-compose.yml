@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  ownclone:
+    build: .
+    container_name: ownclone
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
