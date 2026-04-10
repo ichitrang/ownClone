@@ -1,38 +1,56 @@
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import SFTTrainer
-import torch
+import argparse
+import json
+from pathlib import Path
 
-MODEL_NAME = "mistralai/Mistral-7B-v0.1"
+DEFAULT_INPUT_FILE = "data/founder_decisions_messages_full.json"
+DEFAULT_OUTPUT_FILE = "data/founder_dataset.jsonl"
 
-dataset = load_dataset("json", data_files="data/founder_dataset.jsonl")
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-tokenizer.pad_token = tokenizer.eos_token
+def format_record(messages: list[dict]) -> dict:
+    if len(messages) < 3:
+        raise ValueError("Each item must contain at least 3 messages: system, user, assistant")
 
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    torch_dtype=torch.float16,
-    device_map="auto"
-)
+    system = messages[0].get("content", "").strip()
+    user = messages[1].get("content", "").strip()
+    assistant = messages[2].get("content", "").strip()
 
-training_args = TrainingArguments(
-    output_dir="founder-model",
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    learning_rate=2e-4,
-    num_train_epochs=3,
-    logging_steps=10,
-    save_steps=50,
-)
+    text = f"""<s>[INST] <<SYS>>
+{system}
+<</SYS>>
 
-trainer = SFTTrainer(
-    model=model,
-    train_dataset=dataset["train"],
-    dataset_text_field="text",
-    tokenizer=tokenizer,
-    args=training_args
-)
+{user} [/INST] {assistant}</s>"""
+    return {"text": text}
 
-trainer.train()
-trainer.save_model("founder-model")
+
+def convert(input_file: Path, output_file: Path) -> int:
+    with input_file.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("Input JSON must be a list of conversation items")
+
+    output_rows = [format_record(item["messages"]) for item in data]
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with output_file.open("w", encoding="utf-8") as f:
+        for row in output_rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    return len(output_rows)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Convert chat JSON data to SFT JSONL format")
+    parser.add_argument("--input", default=DEFAULT_INPUT_FILE, help="Input JSON file path")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT_FILE, help="Output JSONL file path")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    count = convert(Path(args.input), Path(args.output))
+    print(f"Dataset ready! Wrote {count} rows to {args.output}")
+
+
+if __name__ == "__main__":
+    main()
